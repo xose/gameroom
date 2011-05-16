@@ -40,6 +40,9 @@ public class ChessRoom extends AbstractRoom {
 	protected final void commandReceived(final String nickname, final String[] command) {
 		if (command.length == 1 && command[0].equals("!board")) {
 			sendMessage(chessGame.getBoard().toString(), nickname);
+		} else if (command.length == 1 && command[0].equals("!undo")) {
+			chessGame.undo();
+			sendMessage("board:"+chessGame.getBoard().toString());
 		} else if (command.length == 3 && command[0].equals("!move")) {
 			if (!nickname.equals(chessGame.getCurrentPlayer().getName())) {
 				sendMessage("Invalid turn", nickname);
@@ -55,7 +58,7 @@ public class ChessRoom extends AbstractRoom {
 			}
 
 			if (chessGame.move(from, to)) {
-				sendMessage(String.format("move %s %s", from.toString(), to.toString()));
+				sendMessage("move:" + from.toString() + ":" + to.toString());
 
 				// TODO: check status
 			} else {
@@ -68,6 +71,7 @@ public class ChessRoom extends AbstractRoom {
 	protected void playerJoined(final String nickname) {
 		log.debug(nickname + " joined");
 		chessGame.addPlayer(nickname);
+		sendMessage("board:"+chessGame.getBoard().toString(), nickname);
 	}
 
 	@Override
