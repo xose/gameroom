@@ -47,11 +47,6 @@
 			<artifactId>gamelib</artifactId>
 			<version>0.1-SNAPSHOT</version>
 		</dependency>
-		<!-- <dependency>
-			<groupId>org.mongodb</groupId>
-			<artifactId>mongo-java-driver</artifactId>
-			<version>2.5.3</version>
-		</dependency> -->
 		<dependency>
 			<groupId>org.igniterealtime</groupId>
 			<artifactId>tinder</artifactId>

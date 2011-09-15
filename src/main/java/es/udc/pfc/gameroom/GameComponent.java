@@ -113,6 +113,7 @@ public class GameComponent extends AbstractComponent {
 					continue;
 				}
 
+				System.out.println("join game");
 				room.sendInvitation(from, "Join game");
 				return;
 			}
@@ -120,6 +121,7 @@ public class GameComponent extends AbstractComponent {
 			// Create a new room and invite the user
 			final Room newRoom = newRoom("chess");
 			if (newRoom != null) {
+				System.out.println("new game");
 				newRoom.sendInvitation(from, "New Game");
 			}
 		}

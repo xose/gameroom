@@ -16,7 +16,6 @@
 
 package es.udc.pfc.gameroom.rooms;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -31,17 +30,20 @@ import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 import org.xmpp.packet.Packet;
 
+import com.google.common.base.Splitter;
+import com.google.common.collect.ImmutableList;
+
 import es.udc.pfc.gameroom.GameComponent;
 
 public abstract class AbstractRoom implements Room {
 
 	protected final Logger log = LoggerFactory.getLogger(getClass());
+	
+	private static final Splitter cmdSplitter = Splitter.on(' ');
 
 	abstract protected void playerJoined(String nickname);
-
 	abstract protected void playerLeft(String nickname);
-
-	abstract protected void commandReceived(String nickname, String[] command);
+	abstract protected void commandReceived(String nickname, ImmutableList<String> command);
 
 	private final GameComponent component;
 	private final JID roomJID;
@@ -75,10 +77,8 @@ public abstract class AbstractRoom implements Room {
 	@Override
 	public void configureRoom() {
 		final Map<String, Collection<String>> fields = new HashMap<String, Collection<String>>();
-		final Collection<String> no = new ArrayList<String>();
-		final Collection<String> si = new ArrayList<String>();
-		no.add("0");
-		si.add("1");
+		final Collection<String> no = ImmutableList.of("0");
+		final Collection<String> si = ImmutableList.of("1");
 
 		fields.put("muc#roomconfig_persistentroom", no);
 		fields.put("muc#roomconfig_publicroom", no);
@@ -137,17 +137,21 @@ public abstract class AbstractRoom implements Room {
 
 	@Override
 	public void privateMessageRecieved(final String nickname, final String body) {
-		final String[] command = body.split(" ");
+		ImmutableList<String> command = ImmutableList.copyOf(cmdSplitter.split(body));
 
-		if (command.length == 0 || !command[0].startsWith("!"))
+		if (command.isEmpty() || !command.get(0).startsWith("!"))
 			return;
 
-		if (command[0].equals("!ping") && command.length == 1) {
+		if (command.get(0).equals("!ping") && command.size() == 1) {
 			sendMessage("pong", nickname);
 			return;
 		}
 
-		commandReceived(nickname, command);
+		try {
+			commandReceived(nickname, command);
+		} catch (Exception e) {
+			sendMessage("Error: "+e.getMessage(), nickname);
+		}
 	}
 
 	protected final void sendMessage(final String body) {
