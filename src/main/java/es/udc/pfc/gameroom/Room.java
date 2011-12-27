@@ -14,34 +14,34 @@
  * limitations under the License.
  */
 
-package es.udc.pfc.gameroom.rooms;
+package es.udc.pfc.gameroom;
 
 import org.xmpp.packet.JID;
 
 public interface Room {
+	
+	String getType();
+	
+	JID getJID();
 
-	public JID getJID();
+	boolean joinable();
 
-	public boolean isFull();
+	void joinRoom();
 
-	public void joinRoom();
+	void leaveRoom();
 
-	public void leaveRoom();
+	void configureRoom();
 
-	public void configureRoom();
+	void sendInvitation(JID user, String body);
 
-	public void changeSubject(String newSubject);
+	int numPlayers();
 
-	public void sendInvitation(JID user, String body);
+	void occupantJoined(JID user);
 
-	public int numOccupants();
+	void occupantLeft(JID user);
 
-	public void occupantJoined(String nickname);
+	void messageReceived(JID user, String body);
 
-	public void occupantLeft(String nickname);
-
-	public void messageReceived(String nickname, String body);
-
-	public void privateMessageRecieved(String nickname, String body);
+	void privateMessageRecieved(JID user, String body);
 
 }

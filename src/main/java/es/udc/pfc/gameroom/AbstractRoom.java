@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-package es.udc.pfc.gameroom.rooms;
+package es.udc.pfc.gameroom;
+
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.slf4j.Logger;
@@ -30,29 +32,35 @@ import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 import org.xmpp.packet.Packet;
 
+import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
-
-import es.udc.pfc.gameroom.GameComponent;
+import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 
 public abstract class AbstractRoom implements Room {
 
 	protected final Logger log = LoggerFactory.getLogger(getClass());
 	
 	private static final Splitter cmdSplitter = Splitter.on(' ');
+	private static final Joiner cmdJoiner = Joiner.on(':');
 
-	abstract protected void playerJoined(String nickname);
-	abstract protected void playerLeft(String nickname);
-	abstract protected void commandReceived(String nickname, ImmutableList<String> command);
+	abstract protected void updateSubject();
+	abstract protected void playerJoined(JID user);
+	abstract protected void playerLeft(JID user);
+	abstract protected void commandReceived(JID user, ImmutableList<String> command) throws Exception;
 
 	private final GameComponent component;
 	private final JID roomJID;
-	private int occupants;
+	private final JID arbiterJID;
+	
+	protected final List<JID> players; // TODO: move player list here
 
-	public AbstractRoom(final GameComponent component, final JID roomJID) {
-		this.component = component;
-		this.roomJID = roomJID;
-		occupants = 0;
+	protected AbstractRoom(final GameComponent component, final JID roomJID) {
+		this.component = checkNotNull(component);
+		this.roomJID = checkNotNull(roomJID);
+		this.arbiterJID = new JID(roomJID.getNode(), roomJID.getDomain(), "arbiter");
+		this.players = Lists.newArrayList();
 	}
 
 	@Override
@@ -60,23 +68,19 @@ public abstract class AbstractRoom implements Room {
 		return roomJID;
 	}
 
-	private final JID getOccupantJID(final String nick) {
-		return new JID(roomJID.getNode(), roomJID.getDomain(), nick);
-	}
-
 	@Override
 	public void joinRoom() {
-		send(new JoinRoom(component.getJID(), getOccupantJID("arbiter")));
+		send(new JoinRoom(component.getJID(), arbiterJID));
 	}
 
 	@Override
 	public void leaveRoom() {
-		send(new LeaveRoom(component.getJID(), getOccupantJID("arbiter")));
+		send(new LeaveRoom(component.getJID(), arbiterJID));
 	}
 
 	@Override
 	public void configureRoom() {
-		final Map<String, Collection<String>> fields = new HashMap<String, Collection<String>>();
+		final Map<String, Collection<String>> fields = Maps.newHashMap();
 		final Collection<String> no = ImmutableList.of("0");
 		final Collection<String> si = ImmutableList.of("1");
 
@@ -90,10 +94,11 @@ public abstract class AbstractRoom implements Room {
 		config.setTo(roomJID);
 
 		send(config);
+		
+		updateSubject();
 	}
 
-	@Override
-	public void changeSubject(final String newSubject) {
+	protected void changeSubject(final String newSubject) {
 		final Message m = new Message();
 		m.setFrom(component.getJID());
 		m.setTo(roomJID);
@@ -105,20 +110,30 @@ public abstract class AbstractRoom implements Room {
 	}
 
 	@Override
-	public int numOccupants() {
-		return occupants;
+	public int numPlayers() {
+		return players.size();
 	}
 
 	@Override
-	public void occupantJoined(final String nickname) {
-		occupants++;
-		playerJoined(nickname);
+	public void occupantJoined(final JID user) {
+		if (!joinable() || players.contains(user)) 
+			return;
+		
+		players.add(user);
+		log.info(user.toString() + " joined");
+		
+		playerJoined(user);
 	}
 
 	@Override
-	public void occupantLeft(final String nickname) {
-		occupants--;
-		playerLeft(nickname);
+	public void occupantLeft(final JID user) {
+		if (!players.contains(user))
+			return;
+		
+		playerLeft(user);
+		
+		log.info(user.toString() + " left");
+		players.remove(user);
 	}
 
 	@Override
@@ -131,43 +146,43 @@ public abstract class AbstractRoom implements Room {
 	}
 
 	@Override
-	public void messageReceived(final String nickname, final String body) {
+	public void messageReceived(final JID user, final String body) {
 
 	}
 
 	@Override
-	public void privateMessageRecieved(final String nickname, final String body) {
+	public void privateMessageRecieved(final JID user, final String body) {
 		ImmutableList<String> command = ImmutableList.copyOf(cmdSplitter.split(body));
 
 		if (command.isEmpty() || !command.get(0).startsWith("!"))
 			return;
 
 		if (command.get(0).equals("!ping") && command.size() == 1) {
-			sendMessage("pong", nickname);
+			sendResponse(user, "pong");
 			return;
 		}
 
 		try {
-			commandReceived(nickname, command);
+			commandReceived(user, command);
 		} catch (Exception e) {
-			sendMessage("Error: "+e.getMessage(), nickname);
+			sendResponse(user, "error", e.getMessage());
 		}
 	}
 
-	protected final void sendMessage(final String body) {
-		sendMessage(body, null);
+	protected final void sendGroupResponse(final String... args) {
+		sendResponse(getJID(), args);
 	}
-
-	protected final void sendMessage(final String body, final String nickname) {
+	
+	protected final void sendResponse(final JID user, final String... args) {
 		final Message msg = new Message();
 		msg.setFrom(component.getJID());
-		msg.setTo(getOccupantJID(nickname));
-		msg.setType(nickname != null ? Message.Type.chat : Message.Type.groupchat);
-		msg.setBody(body);
+		msg.setTo(user);
+		msg.setType(user.getResource() != null ? Message.Type.chat : Message.Type.groupchat);
+		msg.setBody(cmdJoiner.join(args));
 
 		send(msg);
 	}
-
+	
 	protected final void send(final Packet packet) {
 		component.send(packet);
 	}

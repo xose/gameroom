@@ -16,7 +16,6 @@
 
 package es.udc.pfc.gameroom;
 
-import java.util.HashMap;
 import java.util.Map;
 
 import org.xmpp.component.AbstractComponent;
@@ -27,15 +26,14 @@ import org.xmpp.packet.Message;
 import org.xmpp.packet.Packet;
 import org.xmpp.packet.Presence;
 
-import es.udc.pfc.gameroom.rooms.ChessRoom;
-import es.udc.pfc.gameroom.rooms.Room;
+import com.google.common.collect.Maps;
 
 public class GameComponent extends AbstractComponent {
-
+	
 	private final Map<String, Room> rooms;
 
 	public GameComponent() {
-		rooms = new HashMap<String, Room>();
+		rooms = Maps.newHashMap();
 	}
 
 	@Override
@@ -78,10 +76,18 @@ public class GameComponent extends AbstractComponent {
 			return null;
 		}
 
-		final Room newRoom = new ChessRoom(this, new JID(roomID, getMUCServiceName(), null));
+		final Room newRoom;
+
+		if (type.equals("minichess")) {
+			newRoom = new MiniChessRoom(this, new JID(roomID, getMUCServiceName(), null));
+		}
+		else {
+			log.error("Unknown game type " + type);
+			return null;
+		}
+		
 		newRoom.joinRoom();
 		newRoom.configureRoom();
-		newRoom.changeSubject("Chess Game");
 
 		rooms.put(roomID, newRoom);
 
@@ -103,33 +109,34 @@ public class GameComponent extends AbstractComponent {
 			}
 
 			if (message.getType() == Message.Type.groupchat) {
-				room.messageReceived(from.getResource(), message.getBody());
+				room.messageReceived(from, message.getBody());
 			} else if (message.getType() == Message.Type.chat) {
-				room.privateMessageRecieved(from.getResource(), message.getBody());
+				room.privateMessageRecieved(from, message.getBody());
 			}
-		} else if (message.getBody().equals("play")) {
+		} else if (message.getBody().startsWith("play:")) {
+			final String type = message.getBody().substring(5);
+			
 			for (final Room room : rooms.values()) {
-				if (room.isFull()) {
+				if (!type.equals(room.getType()) || !room.joinable())
 					continue;
-				}
 
-				System.out.println("join game");
-				room.sendInvitation(from, "Join game");
+				log.info("join game: " + room.getJID().toString());
+				room.sendInvitation(from, room.getType());
 				return;
 			}
 
 			// Create a new room and invite the user
-			final Room newRoom = newRoom("chess");
+			final Room newRoom = newRoom(type);
 			if (newRoom != null) {
-				System.out.println("new game");
-				newRoom.sendInvitation(from, "New Game");
+				log.info("new game: " + newRoom.getJID().toString());
+				newRoom.sendInvitation(from, newRoom.getType());
 			}
 		}
 	}
 
 	@Override
 	protected void handlePresence(final Presence presence) {
-		log.debug("Presencia: " + presence.toXML());
+		log.debug("presence: " + presence.toXML());
 
 		final JID from = presence.getFrom();
 		if (from.getDomain().equals(getMUCServiceName())) {
@@ -147,13 +154,15 @@ public class GameComponent extends AbstractComponent {
 			}
 
 			if (presence.getType() == null /* available */) {
-				room.occupantJoined(resource);
+				room.occupantJoined(from);
 				// TODO: Get full JID from x.item[jid] ?
 			} else if (presence.getType() == Presence.Type.unavailable) {
-				room.occupantLeft(resource);
-				if (room.numOccupants() == 0) {
+				room.occupantLeft(from);
+				if (room.numPlayers() == 0) {
 					room.leaveRoom();
 					rooms.remove(node);
+					
+					log.info("close game: " + room.getJID().toString());
 				}
 			}
 		}
