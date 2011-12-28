@@ -20,9 +20,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.Collections;
 
+import org.dom4j.Element;
 import org.xmpp.packet.JID;
-
-import com.google.common.collect.ImmutableList;
+import org.xmpp.packet.Message;
 
 import es.udc.pfc.gamelib.board.Position;
 import es.udc.pfc.gamelib.chess.ChessColor;
@@ -40,6 +40,11 @@ public abstract class ChessRoom extends AbstractRoom {
 		this.chessGame = checkNotNull(chessGame);
 		joinable = true;
 	}
+	
+	@Override
+	protected final String getXMLNS() {
+		return "urn:xmpp:gamepfc:chess";
+	}
 
 	@Override
 	public final boolean joinable() {
@@ -47,29 +52,41 @@ public abstract class ChessRoom extends AbstractRoom {
 	}
 
 	@Override
-	protected final void commandReceived(final JID user, final ImmutableList<String> command) throws Exception {
+	protected final void commandReceived(final JID user, final Element x) throws Exception {
 		if (players.size() != 2) 
-			throw new Exception("Game is not running");
+			throw new Exception("not-started");
 		
-		if (command.size() == 3 && command.get(0).equals("!move")) {
+		if (x.element("move") != null) {
+			final Element xmove = x.element("move");
+			
 			if (playerColor(user) != chessGame.getCurrentTurn())
-				throw new Exception("Invalid turn");
+				throw new Exception("invalid-turn");
 
-			final Position from = Position.fromString(command.get(1));
-			final Position to = Position.fromString(command.get(2));
+			final Position from = Position.fromString(xmove.attributeValue("from"));
+			final Position to = Position.fromString(xmove.attributeValue("to"));
 
 			if (from == null || to == null)
-				throw new Exception("Invalid position");
+				throw new Exception("invalid-position");
 
 			final ChessMovement move = chessGame.movePiece(from, to);
 			if (move == null)
-				throw new Exception("Invalid movement");
+				throw new Exception("invalid-movement");
 			
-			sendGroupResponse("move", move.getFrom().toString(), move.getTo().toString());
+			final Message result = new Message();
+			final Element xr = result.addChildElement("x", getXMLNS());
+			final Element xrmove = xr.addElement("move");
+			xrmove.addAttribute("from", move.getFrom().toString());
+			xrmove.addAttribute("to", move.getTo().toString());
 			
 			if (chessGame.isFinished()) {
-				sendGroupResponse("finished", chessGame.getWinner() != null ? chessGame.getWinner().name() : "draw");
+				if (chessGame.getWinner() != null) {
+					xr.addElement("winner").addAttribute("color", chessGame.getWinner().name());
+				} else {
+					xr.addElement("draw");
+				}
 			}
+			
+			sendGroupMessage(result);
 		}
 	}
 
@@ -77,8 +94,15 @@ public abstract class ChessRoom extends AbstractRoom {
 	protected void playerJoined(final JID user) {
 		if (players.size() == 2) {
 			Collections.shuffle(players);
-			sendResponse(players.get(0), "color", ChessColor.WHITE.name());
-			sendResponse(players.get(1), "color", ChessColor.BLACK.name());
+			
+			Message msg = new Message();
+			msg.addChildElement("x", getXMLNS()).addElement("start").addAttribute("color", ChessColor.WHITE.name());
+			sendMessage(players.get(0), msg);
+			
+			msg = new Message();
+			msg.addChildElement("x", getXMLNS()).addElement("start").addAttribute("color", ChessColor.BLACK.name());
+			sendMessage(players.get(1), msg);
+			
 			joinable = false;
 		}
 	}
@@ -91,7 +115,11 @@ public abstract class ChessRoom extends AbstractRoom {
 		
 		if (players.size() == 2) {
 			chessGame.setWinner(left.other());
-			sendGroupResponse("finished", chessGame.getWinner().name());
+			
+			final Message msg = new Message();
+			final Element x = msg.addChildElement("x", getXMLNS());
+			x.addElement("winner").addAttribute("color", chessGame.getWinner().name());
+			sendGroupMessage(msg);
 		}
 	}
 	

@@ -17,6 +17,7 @@
 package es.udc.pfc.gameroom;
 
 import org.xmpp.packet.JID;
+import org.xmpp.packet.Message;
 
 public interface Room {
 	
@@ -40,8 +41,8 @@ public interface Room {
 
 	void occupantLeft(JID user);
 
-	void messageReceived(JID user, String body);
+	void messageReceived(Message message);
 
-	void privateMessageRecieved(JID user, String body);
+	void privateMessageRecieved(Message message);
 
 }

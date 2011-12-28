@@ -96,9 +96,6 @@ public class GameComponent extends AbstractComponent {
 
 	@Override
 	protected void handleMessage(final Message message) {
-		if (message.getBody() == null)
-			return;
-
 		final JID from = message.getFrom();
 		if (from.getDomain().equals(getMUCServiceName())) {
 			final Room room = rooms.get(from.getNode());
@@ -109,9 +106,9 @@ public class GameComponent extends AbstractComponent {
 			}
 
 			if (message.getType() == Message.Type.groupchat) {
-				room.messageReceived(from, message.getBody());
+				room.messageReceived(message);
 			} else if (message.getType() == Message.Type.chat) {
-				room.privateMessageRecieved(from, message.getBody());
+				room.privateMessageRecieved(message);
 			}
 		} else if (message.getBody().startsWith("play:")) {
 			final String type = message.getBody().substring(5);

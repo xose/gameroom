@@ -22,6 +22,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
+import org.dom4j.Element;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xmpp.muc.Invitation;
@@ -32,23 +33,19 @@ import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 import org.xmpp.packet.Packet;
 
-import com.google.common.base.Joiner;
-import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
 public abstract class AbstractRoom implements Room {
-
+	
 	protected final Logger log = LoggerFactory.getLogger(getClass());
 	
-	private static final Splitter cmdSplitter = Splitter.on(' ');
-	private static final Joiner cmdJoiner = Joiner.on(':');
-
+	abstract protected String getXMLNS();
 	abstract protected void updateSubject();
 	abstract protected void playerJoined(JID user);
 	abstract protected void playerLeft(JID user);
-	abstract protected void commandReceived(JID user, ImmutableList<String> command) throws Exception;
+	abstract protected void commandReceived(JID user, Element x) throws Exception;
 
 	private final GameComponent component;
 	private final JID roomJID;
@@ -146,43 +143,44 @@ public abstract class AbstractRoom implements Room {
 	}
 
 	@Override
-	public void messageReceived(final JID user, final String body) {
+	public void messageReceived(final Message msg) {
 
 	}
 
 	@Override
-	public void privateMessageRecieved(final JID user, final String body) {
-		ImmutableList<String> command = ImmutableList.copyOf(cmdSplitter.split(body));
-
-		if (command.isEmpty() || !command.get(0).startsWith("!"))
+	public void privateMessageRecieved(final Message message) {
+		final Element x = message.getChildElement("x", getXMLNS());
+		if (x == null)
 			return;
 
-		if (command.get(0).equals("!ping") && command.size() == 1) {
-			sendResponse(user, "pong");
+		if (x.element("ping") != null) {
+			final Message msg = new Message();
+			msg.addChildElement("x", getXMLNS()).addElement("pong");
+			sendMessage(message.getFrom(), msg);
 			return;
 		}
 
 		try {
-			commandReceived(user, command);
+			commandReceived(message.getFrom(), x);
 		} catch (Exception e) {
-			sendResponse(user, "error", e.getMessage());
+			final Message msg = new Message();
+			msg.addChildElement("x", getXMLNS()).addElement("error").addAttribute("status", e.getMessage());
+			sendMessage(message.getFrom(), msg);
 		}
 	}
-
-	protected final void sendGroupResponse(final String... args) {
-		sendResponse(getJID(), args);
+	
+	protected final void sendGroupMessage(final Message message) {
+		sendMessage(getJID(), message);
 	}
 	
-	protected final void sendResponse(final JID user, final String... args) {
-		final Message msg = new Message();
-		msg.setFrom(component.getJID());
-		msg.setTo(user);
-		msg.setType(user.getResource() != null ? Message.Type.chat : Message.Type.groupchat);
-		msg.setBody(cmdJoiner.join(args));
+	protected final void sendMessage(final JID user, final Message message) {
+		message.setType(user.getResource() != null ? Message.Type.chat : Message.Type.groupchat);
+		message.setFrom(component.getJID());
+		message.setTo(user);
 
-		send(msg);
+		send(message);
 	}
-	
+
 	protected final void send(final Packet packet) {
 		component.send(packet);
 	}
