@@ -110,7 +110,7 @@ public abstract class ChessRoom extends AbstractRoom {
 	@Override
 	protected void playerLeft(final JID user) {
 		final ChessColor left = playerColor(user);
-		if (left == null)
+		if (left == null || chessGame.isFinished())
 			return;
 		
 		if (players.size() == 2) {
