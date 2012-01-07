@@ -18,6 +18,7 @@ package es.udc.pfc.gameroom;
 
 import java.util.Map;
 
+import org.dom4j.Element;
 import org.xmpp.component.AbstractComponent;
 import org.xmpp.component.ComponentException;
 import org.xmpp.packet.IQ;
@@ -28,7 +29,9 @@ import org.xmpp.packet.Presence;
 
 import com.google.common.collect.Maps;
 
-public class GameComponent extends AbstractComponent {
+public final class GameComponent extends AbstractComponent {
+	
+	private final String XMPP_NS = "urn:xmpp:gamepfc";
 	
 	private final Map<String, Room> rooms;
 
@@ -110,11 +113,13 @@ public class GameComponent extends AbstractComponent {
 			} else if (message.getType() == Message.Type.chat) {
 				room.privateMessageRecieved(message);
 			}
-		} else if (message.getBody().startsWith("play:")) {
-			final String type = message.getBody().substring(5);
+		} else {
+			final Element play = message.getChildElement("play", XMPP_NS);
+			if (play == null || play.attributeValue("game") == null)
+				return;
 			
 			for (final Room room : rooms.values()) {
-				if (!type.equals(room.getType()) || !room.joinable())
+				if (!room.getType().equals(play.attributeValue("game")) || !room.joinable())
 					continue;
 
 				log.info("join game: " + room.getJID().toString());
@@ -123,7 +128,7 @@ public class GameComponent extends AbstractComponent {
 			}
 
 			// Create a new room and invite the user
-			final Room newRoom = newRoom(type);
+			final Room newRoom = newRoom(play.attributeValue("game"));
 			if (newRoom != null) {
 				log.info("new game: " + newRoom.getJID().toString());
 				newRoom.sendInvitation(from, newRoom.getType());

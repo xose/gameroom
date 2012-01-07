@@ -51,7 +51,7 @@ public abstract class AbstractRoom implements Room {
 	private final JID roomJID;
 	private final JID arbiterJID;
 	
-	protected final List<JID> players; // TODO: move player list here
+	protected final List<JID> players;
 
 	protected AbstractRoom(final GameComponent component, final JID roomJID) {
 		this.component = checkNotNull(component);
