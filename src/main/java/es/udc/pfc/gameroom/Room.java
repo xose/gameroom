@@ -16,8 +16,10 @@
 
 package es.udc.pfc.gameroom;
 
-import org.xmpp.packet.JID;
-import org.xmpp.packet.Message;
+import com.google.common.util.concurrent.ListenableFuture;
+
+import es.udc.pfc.xmpp.stanza.JID;
+import es.udc.pfc.xmpp.stanza.Message;
 
 public interface Room {
 	
@@ -31,7 +33,7 @@ public interface Room {
 
 	void leaveRoom();
 
-	void configureRoom();
+	ListenableFuture<Void> configureRoom();
 
 	void sendInvitation(JID user, String body);
 

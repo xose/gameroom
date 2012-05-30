@@ -16,20 +16,33 @@
 
 package es.udc.pfc.gameroom;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.util.Map;
 
-import org.dom4j.Element;
-import org.xmpp.component.AbstractComponent;
-import org.xmpp.component.ComponentException;
-import org.xmpp.packet.IQ;
-import org.xmpp.packet.JID;
-import org.xmpp.packet.Message;
-import org.xmpp.packet.Packet;
-import org.xmpp.packet.Presence;
+import org.bson.BSONObject;
 
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.AsyncFunction;
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
+import com.google.common.util.concurrent.Service.State;
 
-public final class GameComponent extends AbstractComponent {
+import es.udc.pfc.xmpp.component.AbstractXMPPComponent;
+import es.udc.pfc.xmpp.component.ComponentService;
+import es.udc.pfc.xmpp.stanza.IQ;
+import es.udc.pfc.xmpp.stanza.JID;
+import es.udc.pfc.xmpp.stanza.Message;
+import es.udc.pfc.xmpp.stanza.Presence;
+import es.udc.pfc.xmpp.stanza.XMPPNamespaces;
+import es.udc.pfc.xmpp.xml.XMLElement;
+
+public final class GameComponent extends AbstractXMPPComponent {
 	
 	private final String XMPP_NS = "urn:xmpp:gamepfc";
 	
@@ -51,50 +64,64 @@ public final class GameComponent extends AbstractComponent {
 
 	private final String getMUCServiceName() {
 		// TODO: Turn this into a configuration option
-		return "conference." + compMan.getServerName();
+		return "conference." + getServerJID().getDomain();
 	}
 
-	private final String getUniqueRoomName() {
+	private final ListenableFuture<String> getUniqueRoomName() {
 		final IQ unique = new IQ(IQ.Type.get);
 		unique.setFrom(getJID());
-		unique.setTo(getMUCServiceName());
-		unique.setChildElement("unique", "http://jabber.org/protocol/muc#unique");
+		unique.setTo(JID.jid(getMUCServiceName()));
+		unique.addExtension("unique", XMPPNamespaces.MUC_UNIQUE);
 
-		try {
-			final IQ result = compMan.query(this, unique, 1000);
-
-			if (result.getType() != IQ.Type.result || !result.getChildElement().getName().equals("unique"))
-				return null;
-
-			return result.getChildElement().getText();
-		} catch (final ComponentException e) {
-			return null;
-		}
+		return Futures.transform(sendIQ(unique), new AsyncFunction<IQ, String>() {
+			@Override
+			public ListenableFuture<String> apply(IQ input) throws Exception {
+				final XMLElement unique = input.getExtension("unique", XMPPNamespaces.MUC_UNIQUE);
+				if (unique == null)
+					throw new Exception("No unique received");
+				
+				return Futures.immediateFuture(unique.getText());
+			}
+		});
 	}
 
-	public final Room newRoom(final String type) {
-		final String roomID = getUniqueRoomName();
-		if (roomID == null) {
-			log.error("Error requesting unique room name");
-			return null;
-		}
+	public final ListenableFuture<Room> newRoom(final String type) {
+		final SettableFuture<Room> future = SettableFuture.create();
+		Futures.addCallback(getUniqueRoomName(), new FutureCallback<String>() {
+			@Override
+			public void onSuccess(String roomID) {
+				if (roomID == null) {
+					log.severe("Error requesting unique room name");
+					future.setException(new Exception("Error requesting unique room name"));
+					return;
+				}
+				
+				final Room newRoom;
 
-		final Room newRoom;
+				if (type.equals("minichess")) {
+					newRoom = new MiniChessRoom(GameComponent.this, JID.jid(getMUCServiceName(), roomID, null));
+				}
+				else {
+					log.severe("Unknown game type " + type);
+					future.setException(new Exception("Unknown game type " + type));
+					return;
+				}
+				
+				rooms.put(roomID, newRoom);
+				
+				newRoom.joinRoom();
+				newRoom.configureRoom();
+				
+				future.set(newRoom);
+			}
 
-		if (type.equals("minichess")) {
-			newRoom = new MiniChessRoom(this, new JID(roomID, getMUCServiceName(), null));
-		}
-		else {
-			log.error("Unknown game type " + type);
-			return null;
-		}
+			@Override
+			public void onFailure(Throwable t) {
+				future.setException(t);
+			}
+		});
 		
-		newRoom.joinRoom();
-		newRoom.configureRoom();
-
-		rooms.put(roomID, newRoom);
-
-		return newRoom;
+		return future;
 	}
 
 	@Override
@@ -104,7 +131,7 @@ public final class GameComponent extends AbstractComponent {
 			final Room room = rooms.get(from.getNode());
 
 			if (room == null) {
-				log.debug(String.format("Room %s not found", from.getNode()));
+				log.warning(String.format("Room '%s' not found", from.getNode()));
 				return;
 			}
 
@@ -114,12 +141,12 @@ public final class GameComponent extends AbstractComponent {
 				room.privateMessageRecieved(message);
 			}
 		} else {
-			final Element play = message.getChildElement("play", XMPP_NS);
-			if (play == null || play.attributeValue("game") == null)
+			final XMLElement play = message.getExtension("play", XMPP_NS);
+			if (play == null || !play.hasAttribute("game"))
 				return;
 			
 			for (final Room room : rooms.values()) {
-				if (!room.getType().equals(play.attributeValue("game")) || !room.joinable())
+				if (!room.getType().equals(play.getAttribute("game")) || !room.joinable())
 					continue;
 
 				log.info("join game: " + room.getJID().toString());
@@ -128,18 +155,23 @@ public final class GameComponent extends AbstractComponent {
 			}
 
 			// Create a new room and invite the user
-			final Room newRoom = newRoom(play.attributeValue("game"));
-			if (newRoom != null) {
-				log.info("new game: " + newRoom.getJID().toString());
-				newRoom.sendInvitation(from, newRoom.getType());
-			}
+			Futures.addCallback(newRoom(play.getAttribute("game")), new FutureCallback<Room>() {
+				@Override
+				public void onSuccess(Room result) {
+					log.info("new game: " + result.getJID().toString());
+					result.sendInvitation(from, result.getType());
+				}
+
+				@Override
+				public void onFailure(Throwable t) {
+					log.severe("Could not create a new room: " + t.getMessage());
+				}
+			});
 		}
 	}
 
 	@Override
 	protected void handlePresence(final Presence presence) {
-		log.debug("presence: " + presence.toXML());
-
 		final JID from = presence.getFrom();
 		if (from.getDomain().equals(getMUCServiceName())) {
 			// Room presence
@@ -151,7 +183,7 @@ public final class GameComponent extends AbstractComponent {
 
 			final Room room = rooms.get(node);
 			if (room == null) {
-				log.debug(String.format("Room '%s' not found", from.getNode()));
+				log.warning(String.format("Room '%s' not found", from.getNode()));
 				return;
 			}
 
@@ -169,24 +201,65 @@ public final class GameComponent extends AbstractComponent {
 			}
 		}
 	}
-
+	
 	@Override
-	public void postComponentStart() {
-		log.info("GameRoom initialized");
-	}
-
-	@Override
-	public void preComponentShutdown() {
-		log.info("Shutting down...");
-
-		for (final Room room : rooms.values()) {
-			room.leaveRoom();
+	public void connected() {
+		super.connected();
+		
+		for (final BSONObject object : Database.getOpenGames()) {
+			log.finer("Restarting: " + object.toString());
+			
+			final String type = object.get("type").toString();
+			if ("minichess".equals(type)) {
+				final Room newRoom = new MiniChessRoom(this, object);
+				
+				rooms.put(newRoom.getJID().getNode(), newRoom);
+				newRoom.joinRoom();
+				
+				log.info("Restarted: " + newRoom.getJID());
+			}
+			else {
+				log.warning("Unknown type " + type);
+			}
 		}
 	}
 
 	@Override
-	public void send(final Packet packet) {
-		super.send(packet);
+	public void willDisconnect() {
+		for (final Room room : rooms.values()) {
+			room.leaveRoom();
+		}
+		super.willDisconnect();
 	}
 
+	@Override
+	protected ListenableFuture<IQ> handleIQ(IQ iq) {
+		return Futures.immediateFailedFuture(new Exception("Not implemented"));
+	}
+	
+	public static void main(String[] args) throws IOException {
+		
+		final ComponentService cs = new ComponentService(new GameComponent(), new InetSocketAddress(InetAddress.getLoopbackAddress(), 5275), "games.localhost", "secret");
+
+		if (cs.startAndWait() != State.RUNNING) {
+			System.err.println("Error starting component");
+			return;
+		}
+
+		BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
+		while (cs.isRunning()) {
+			String line = in.readLine();
+			if (line == null || line.isEmpty()) {
+				continue;
+			}
+
+			if (line.toLowerCase().equals("quit")) {
+				cs.stopAndWait();
+				break;
+			}
+
+			cs.send(line);
+		}
+	}
+	
 }

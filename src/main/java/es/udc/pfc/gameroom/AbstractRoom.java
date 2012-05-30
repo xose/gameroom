@@ -18,36 +18,48 @@ package es.udc.pfc.gameroom;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
-import java.util.Collection;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.logging.Logger;
 
-import org.dom4j.Element;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.xmpp.muc.Invitation;
-import org.xmpp.muc.JoinRoom;
-import org.xmpp.muc.LeaveRoom;
-import org.xmpp.muc.RoomConfiguration;
-import org.xmpp.packet.JID;
-import org.xmpp.packet.Message;
-import org.xmpp.packet.Packet;
+import org.bson.BSONObject;
+import org.bson.types.BasicBSONList;
+import org.bson.types.ObjectId;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.FutureCallback;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
+import com.mongodb.BasicDBObject;
+import com.mongodb.DBObject;
+
+import es.udc.pfc.xmpp.stanza.IQ;
+import es.udc.pfc.xmpp.stanza.JID;
+import es.udc.pfc.xmpp.stanza.Message;
+import es.udc.pfc.xmpp.stanza.Presence;
+import es.udc.pfc.xmpp.stanza.Stanza;
+import es.udc.pfc.xmpp.stanza.XMPPNamespaces;
+import es.udc.pfc.xmpp.xml.XMLElement;
 
 public abstract class AbstractRoom implements Room {
 	
-	protected final Logger log = LoggerFactory.getLogger(getClass());
+	protected final Logger log = Logger.getLogger(getClass().getSimpleName());
 	
 	abstract protected String getXMLNS();
 	abstract protected void updateSubject();
 	abstract protected void playerJoined(JID user);
 	abstract protected void playerLeft(JID user);
-	abstract protected void commandReceived(JID user, Element x) throws Exception;
+	abstract protected void commandReceived(JID user, XMLElement x) throws Exception;
 
 	private final GameComponent component;
+	private final ObjectId dbId;
+	
+	private final Date startTime;
+	
 	private final JID roomJID;
 	private final JID arbiterJID;
 	
@@ -56,10 +68,26 @@ public abstract class AbstractRoom implements Room {
 	protected AbstractRoom(final GameComponent component, final JID roomJID) {
 		this.component = checkNotNull(component);
 		this.roomJID = checkNotNull(roomJID);
-		this.arbiterJID = new JID(roomJID.getNode(), roomJID.getDomain(), "arbiter");
+		this.arbiterJID = JID.jid(roomJID.getDomain(), roomJID.getNode(), "arbiter");
 		this.players = Lists.newArrayList();
+		this.dbId = ObjectId.get();
+		this.startTime = new Date();
 	}
-
+	
+	protected AbstractRoom(final GameComponent component, final BSONObject dbObject) {
+		this.component = checkNotNull(component);
+		this.roomJID = JID.jid(dbObject.get("room").toString());
+		this.arbiterJID = JID.jid(roomJID.getDomain(), roomJID.getNode(), "arbiter");
+		this.players = Lists.newArrayList();
+		this.dbId = (ObjectId)dbObject.get("_id");
+		this.startTime = (Date)dbObject.get("started");
+		
+		final List<Object> playerList = (List<Object>)dbObject.get("players");
+		for (final Object player : playerList) {
+			players.add(JID.jid(player.toString()));
+		}
+	}
+	
 	@Override
 	public final JID getJID() {
 		return roomJID;
@@ -67,32 +95,61 @@ public abstract class AbstractRoom implements Room {
 
 	@Override
 	public void joinRoom() {
-		send(new JoinRoom(component.getJID(), arbiterJID));
+		final Presence join = new Presence();
+		join.setFrom(component.getJID());
+		join.setTo(arbiterJID);
+		join.addExtension("x", XMPPNamespaces.MUC);
+		send(join);
 	}
 
 	@Override
 	public void leaveRoom() {
-		send(new LeaveRoom(component.getJID(), arbiterJID));
+		final Presence leave = new Presence(Presence.Type.unavailable);
+		leave.setFrom(component.getJID());
+		leave.setTo(arbiterJID);
+		send(leave);
 	}
 
 	@Override
-	public void configureRoom() {
-		final Map<String, Collection<String>> fields = Maps.newHashMap();
-		final Collection<String> no = ImmutableList.of("0");
-		final Collection<String> si = ImmutableList.of("1");
+	public ListenableFuture<Void> configureRoom() {
+		final SettableFuture<Void> future = SettableFuture.create();
+		final Map<String, List<String>> fields = Maps.newHashMap();
+		final List<String> no = ImmutableList.of("0");
+		final List<String> si = ImmutableList.of("1");
 
 		fields.put("muc#roomconfig_persistentroom", no);
 		fields.put("muc#roomconfig_publicroom", no);
 		fields.put("muc#roomconfig_membersonly", si);
 		fields.put("muc#roomconfig_changesubject", no);
 
-		final RoomConfiguration config = new RoomConfiguration(fields);
+		final IQ config = new IQ(IQ.Type.set);
 		config.setFrom(component.getJID());
 		config.setTo(roomJID);
-
-		send(config);
+		final XMLElement data = config.addExtension("x", XMPPNamespaces.DATA);
+		data.setAttribute("type", "submit");
 		
-		updateSubject();
+		for (final Map.Entry<String, List<String>> field : fields.entrySet()) {
+			final XMLElement f = data.addChild("field");
+			f.setAttribute("var", field.getKey());
+			for (final String value : field.getValue()) {
+				f.addChild("value").setText(value);
+			}
+		}
+
+		Futures.addCallback(component.sendIQ(config), new FutureCallback<IQ>() {
+			@Override
+			public void onSuccess(IQ result) {
+				updateSubject();
+				future.set(null);
+			}
+
+			@Override
+			public void onFailure(Throwable t) {
+				future.setException(t);
+			}
+		});
+		
+		return future;
 	}
 
 	protected void changeSubject(final String newSubject) {
@@ -135,9 +192,13 @@ public abstract class AbstractRoom implements Room {
 
 	@Override
 	public void sendInvitation(final JID user, final String body) {
-		final Invitation invite = new Invitation(user, body);
+		final Message invite = new Message();
 		invite.setFrom(component.getJID());
 		invite.setTo(roomJID);
+		
+		final XMLElement inv = invite.addExtension("x", XMPPNamespaces.MUC_USER).addChild("invite");
+		inv.setAttribute("to", user.toString());
+		inv.setChildText("reason", body);
 
 		send(invite);
 	}
@@ -149,13 +210,13 @@ public abstract class AbstractRoom implements Room {
 
 	@Override
 	public void privateMessageRecieved(final Message message) {
-		final Element x = message.getChildElement("x", getXMLNS());
+		final XMLElement x = message.getExtension("x", getXMLNS());
 		if (x == null)
 			return;
 
-		if (x.element("ping") != null) {
+		if (x.hasChild("ping")) {
 			final Message msg = new Message();
-			msg.addChildElement("x", getXMLNS()).addElement("pong");
+			msg.addExtension("x", getXMLNS()).addChild("pong");
 			sendMessage(message.getFrom(), msg);
 			return;
 		}
@@ -164,9 +225,30 @@ public abstract class AbstractRoom implements Room {
 			commandReceived(message.getFrom(), x);
 		} catch (Exception e) {
 			final Message msg = new Message();
-			msg.addChildElement("x", getXMLNS()).addElement("error").addAttribute("status", e.getMessage());
+			msg.addExtension("x", getXMLNS()).addChild("error").setAttribute("status", e.getMessage());
 			sendMessage(message.getFrom(), msg);
 		}
+	}
+	
+	protected abstract void buildBSONObject(final BSONObject data);
+	
+	protected final void saveDBObject() {
+		final DBObject result = new BasicDBObject("_id", dbId);
+		
+		result.put("room", getJID().toString());
+		result.put("type", getType());
+		result.put("started", startTime);
+		result.put("lastUpdate", new Date());
+		
+		final List<Object> playerList = new BasicBSONList();
+		for (final JID player : players) {
+			playerList.add(player.toString());
+		}
+		result.put("players", playerList);
+		
+		buildBSONObject(result);
+		Database.saveGame(result);
+		System.out.println("saved: " + result.toString());
 	}
 	
 	protected final void sendGroupMessage(final Message message) {
@@ -181,7 +263,7 @@ public abstract class AbstractRoom implements Room {
 		send(message);
 	}
 
-	protected final void send(final Packet packet) {
-		component.send(packet);
+	protected final void send(final Stanza stanza) {
+		component.send(stanza);
 	}
 }

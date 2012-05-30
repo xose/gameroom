@@ -14,31 +14,10 @@
  * limitations under the License.
  */
 
+/**
+ * Gameroom
+ */
+@ParametersAreNonnullByDefault
 package es.udc.pfc.gameroom;
 
-import org.bson.BSONObject;
-
-import es.udc.pfc.gamelib.chess.MiniChessGame;
-import es.udc.pfc.xmpp.stanza.JID;
-
-public final class MiniChessRoom extends ChessRoom {
-
-	public MiniChessRoom(final GameComponent component, final JID roomJID) {
-		super(component, roomJID, new MiniChessGame());
-	}
-	
-	public MiniChessRoom(final GameComponent component, final BSONObject dbObject) {
-		super(component, dbObject, new MiniChessGame());
-	}
-	
-	@Override
-	public final String getType() {
-		return "minichess";
-	}
-	
-	@Override
-	protected final void updateSubject() {
-		changeSubject("MiniChess");
-	}
-
-}
+import javax.annotation.ParametersAreNonnullByDefault;
