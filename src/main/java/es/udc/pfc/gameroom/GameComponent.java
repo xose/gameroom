@@ -239,7 +239,7 @@ public final class GameComponent extends AbstractXMPPComponent {
 	
 	public static void main(String[] args) throws IOException {
 		
-		final ComponentService cs = new ComponentService(new GameComponent(), new InetSocketAddress(InetAddress.getLoopbackAddress(), 5275), "games.localhost", "secret");
+		final ComponentService cs = new ComponentService(new GameComponent(), new InetSocketAddress("localhost", 5275), "games.localhost", "secret");
 
 		if (cs.startAndWait() != State.RUNNING) {
 			System.err.println("Error starting component");
